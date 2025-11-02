@@ -37,7 +37,7 @@ jobs:
           if docker manifest inspect "rockylinux:${{ matrix.rel }}" >/dev/null 2>&1; then
             echo "base=rockylinux:${{ matrix.rel }}" >> "$GITHUB_OUTPUT"
           else
-            echo "rockylinux:${{ matrix.rel }} not found — falling back to rockylinux:9"
+            echo "rockylinux:${{ matrix.rel }} not found — fallback to rockylinux:9"
             echo "base=rockylinux:9" >> "$GITHUB_OUTPUT"
           fi
 
@@ -54,6 +54,7 @@ jobs:
             dnf -y --allowerasing --nobest install ca-certificates dnf dnf-plugins-core curl || \
             dnf -y reinstall ca-certificates
 
+            # Repos für Tool-Installation im Container
             cat > /etc/yum.repos.d/rocky.repo <<EOF
             [baseos]
             name=Rocky${{ matrix.rel }} BaseOS
@@ -74,17 +75,23 @@ jobs:
             gpgcheck=0
             EOF
 
-            dnf -y --allowerasing --nobest install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
+            dnf -y --allowerasing --nobest install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git gettext
+
+            echo "=== Render kickstart from template for Rocky${{ matrix.rel }} ==="
+            export BASEURL="${{ matrix.baseurl }}/BaseOS/x86_64/os/"
+            export APPSTREAMURL="${{ matrix.baseurl }}/AppStream/x86_64/os/"
+            export EXTRASURL="${{ matrix.baseurl }}/extras/x86_64/os/"
+            envsubst < kickstart/ks.template.cfg > /tmp/ks.effective.cfg
 
             echo "=== Validating kickstart ==="
-            ksvalidator kickstart/ks.cfg
+            ksvalidator /tmp/ks.effective.cfg
 
             chmod +x scripts/mkiso.sh
             ISO_NAME="OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-$(date +%Y%m%d)"
-            TAG=${{ matrix.tag }} RELEASEVER=${{ matrix.rel }} scripts/mkiso.sh kickstart/ks.cfg /tmp/build
+            TAG=${{ matrix.tag }} RELEASEVER=${{ matrix.rel }} scripts/mkiso.sh /tmp/ks.effective.cfg /tmp/build
 
             chmod +x tools/gen-changelog.sh
-            tools/gen-changelog.sh /tmp/build/CHANGELOG.md
+            RELEASEVER=${{ matrix.rel }} TAG=${{ matrix.tag }} tools/gen-changelog.sh /tmp/build/CHANGELOG.md
 
             mkdir -p build/${{ matrix.rel }}
             cp -v /tmp/build/* build/${{ matrix.rel }}/
@@ -114,7 +121,7 @@ jobs:
           sha256sum build/${{ matrix.rel }}/*.iso | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
   test:
-    name: Smoke tests (BIOS & UEFI — stable only)
+    name: Smoke tests (BIOS & UEFI – stable only)
     runs-on: ubuntu-latest
     needs: build
     if: always()
