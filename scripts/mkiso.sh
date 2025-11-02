@@ -5,7 +5,7 @@ KS=${1:-kickstart/ks.cfg}
 OUTDIR=${2:-build}
 ISO_NAME=${ISO_NAME:-OS-LVirt-Migrationassistant-$(date +%Y%m%d)}
 ISO_LABEL=${ISO_LABEL:-OS_LVIRT_P2V}
-RELEASEVER=${RELEASEVER:-10}
+RELEASEVER=${RELEASEVER:-9}
 
 # --- livemedia-creator verlangt NICHT existierendes results_dir ---
 if [ -d "${OUTDIR}" ]; then
