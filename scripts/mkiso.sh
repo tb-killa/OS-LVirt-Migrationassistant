@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
 # mkiso.sh – ISO Build Script for OS-LVirt-Migrationassistant
-# Compatible with Lorax v34 (Rocky 9) and v40 (Rocky 10)
+# Compatible with Lorax v34 (Rocky 9) and v40+ (Rocky 10)
 # -----------------------------------------------------------------------------
 set -euxo pipefail
 
@@ -22,10 +22,10 @@ if [ -d "$OUTDIR" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 📁 Create temp working dir (Lorax-safe)
+# 📁 Create temp working dir path (Lorax-safe)
 # -----------------------------------------------------------------------------
-TMPDIR=$(mktemp -d /tmp/oslv-build.XXXXXX)
-echo "Using temp build dir: $TMPDIR"
+TMPDIR=$(mktemp -u /tmp/oslv-build.XXXXXX)
+echo "Using planned temp build dir: $TMPDIR (will be created by Lorax)"
 
 # -----------------------------------------------------------------------------
 # 🧱 Run livemedia-creator
@@ -41,7 +41,7 @@ livemedia-creator \
   --volid "OSLVIRT_MIGRATION" \
   --resultdir "$TMPDIR" \
   --iso-only \
-  --logfile "$TMPDIR/lmc.log"
+  --logfile "/tmp/lmc.log"
 
 echo ""
 echo "=== ISO build complete ==="
