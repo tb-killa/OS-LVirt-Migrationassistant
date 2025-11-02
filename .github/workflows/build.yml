@@ -49,7 +49,11 @@ jobs:
           run: |
             set -eux
             echo "=== Preparing Repo Definitions for Rocky${{ matrix.rel }} ==="
-            dnf -y install ca-certificates dnf dnf-plugins-core curl
+
+            dnf clean all
+            dnf -y --allowerasing --nobest install ca-certificates dnf dnf-plugins-core curl || \
+            dnf -y reinstall ca-certificates
+
             cat > /etc/yum.repos.d/rocky.repo <<EOF
             [baseos]
             name=Rocky${{ matrix.rel }} BaseOS
@@ -70,7 +74,7 @@ jobs:
             gpgcheck=0
             EOF
 
-            dnf -y install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
+            dnf -y --allowerasing --nobest install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
 
             echo "=== Validating kickstart ==="
             ksvalidator kickstart/ks.cfg
@@ -110,13 +114,13 @@ jobs:
           sha256sum build/${{ matrix.rel }}/*.iso | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
   test:
-    name: Smoke tests (BIOS & UEFI, stable only)
+    name: Smoke tests (BIOS & UEFI — stable only)
     runs-on: ubuntu-latest
     needs: build
+    if: always()
     strategy:
       matrix:
         mode: [ bios, uefi ]
-    if: ${{ always() && contains(needs.build.outputs['matrix.rel'], '9') }}
 
     steps:
       - uses: actions/download-artifact@v4
