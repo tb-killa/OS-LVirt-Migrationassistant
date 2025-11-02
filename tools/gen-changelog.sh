@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
-OUT="${1:-CHANGELOG.md}"
-{
-  echo "# Build Report $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  echo
-  echo "## /etc/os-release"
-  sed 's/^/    /' /etc/os-release || true
-  echo
-  echo "## Installed packages (sorted)"
-  rpm -qa --qf '    %{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort
-  echo
-  echo "## DNF history (last 20)"
-  dnf history | head -n 40 | sed 's/^/    /'
-} > "$OUT"
-echo "Wrote $OUT"
+OUTFILE=${1:-build/CHANGELOG.md}
+
+echo "# OS-LVirt-Migrationassistant Build Summary" > "$OUTFILE"
+echo "" >> "$OUTFILE"
+
+if [ -n "${RELEASEVER:-}" ]; then
+  echo "## Rocky Linux ${RELEASEVER} Build" >> "$OUTFILE"
+fi
+
+if [ -n "${TAG:-}" ]; then
+  echo "- Channel: ${TAG}" >> "$OUTFILE"
+fi
+
+echo "- Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$OUTFILE"
+echo "" >> "$OUTFILE"
+
+echo "### DNF Package Snapshot" >> "$OUTFILE"
+echo '```' >> "$OUTFILE"
+dnf list installed | sort >> "$OUTFILE" 2>/dev/null || echo "(Package list unavailable)" >> "$OUTFILE"
+echo '```' >> "$OUTFILE"
