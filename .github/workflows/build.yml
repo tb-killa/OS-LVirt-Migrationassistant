@@ -46,13 +46,31 @@ jobs:
           options: -v ${{ github.workspace }}:/workspace -w /workspace
           run: |
             set -eux
+            echo "=== Environment ==="
+            uname -a
+            cat /etc/redhat-release || true
+            echo "===================="
+
+            # Build dependencies
             dnf -y install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
+
+            # Kickstart validity check
             ksvalidator kickstart/ks.cfg
+
+            # Run ISO build in /tmp to avoid /workspace conflicts
             chmod +x scripts/mkiso.sh
-            ISO_NAME="OS-LVirt-Migrationassistant-$(date +%Y%m%d)" \
-              scripts/mkiso.sh kickstart/ks.cfg build
+            ISO_NAME="OS-LVirt-Migrationassistant-$(date +%Y%m%d)"
+            scripts/mkiso.sh kickstart/ks.cfg /tmp/build
+
+            # Generate changelog inside container
             chmod +x tools/gen-changelog.sh
-            tools/gen-changelog.sh build/CHANGELOG.md
+            tools/gen-changelog.sh /tmp/build/CHANGELOG.md
+
+            # Copy results back into mounted workspace
+            mkdir -p build
+            cp -v /tmp/build/* build/
+
+            # Pack artifacts
             cd build
             tar -czf OS-LVirt-Migrationassistant-${GITHUB_RUN_NUMBER}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
 
@@ -86,7 +104,7 @@ jobs:
 
     steps:
       - uses: actions/download-artifact@v4
-        with: 
+        with:
           name: iso-artifacts
           path: dist
 
