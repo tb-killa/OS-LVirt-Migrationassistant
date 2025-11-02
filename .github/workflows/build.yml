@@ -25,7 +25,7 @@ jobs:
             baseurl: "http://dl.rockylinux.org/pub/rocky/9"
           - rel: "10"
             tag: "beta"
-            baseurl: "http://download.rockylinux.org/pub/rocky/development/10"
+            baseurl: "http://download.rockylinux.org/pub/rocky/10/development"
 
     steps:
       - uses: actions/checkout@v4
@@ -62,13 +62,13 @@ jobs:
             baseurl=${{ matrix.baseurl }}/BaseOS/x86_64/os/
             enabled=1
             gpgcheck=0
-            
+
             [build-appstream]
             name=Rocky${{ matrix.rel }} Build AppStream
             baseurl=${{ matrix.baseurl }}/AppStream/x86_64/os/
             enabled=1
             gpgcheck=0
-            
+
             [build-extras]
             name=Rocky${{ matrix.rel }} Build Extras
             baseurl=${{ matrix.baseurl }}/extras/x86_64/os/
@@ -79,22 +79,40 @@ jobs:
             # --- Base dependencies for lorax ---
             dnf -y --allowerasing --nobest install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git gettext
 
+            echo "=== Resolve KS repo paths (with v10 fallback check) ==="
+            if [ "${{ matrix.rel }}" = "10" ]; then
+              ALT_BASE="http://download.rockylinux.org/pub/rocky/10/development"
+              if curl -sfI "${ALT_BASE}/BaseOS/x86_64/os/repodata/repomd.xml" >/dev/null; then
+                export BASEURL="${ALT_BASE}/BaseOS/x86_64/os/"
+                export APPSTREAMURL="${ALT_BASE}/AppStream/x86_64/os/"
+                export EXTRASURL="${ALT_BASE}/extras/x86_64/os/"
+              else
+                export BASEURL="${{ matrix.baseurl }}/BaseOS/x86_64/os/"
+                export APPSTREAMURL="${{ matrix.baseurl }}/AppStream/x86_64/os/"
+                export EXTRASURL="${{ matrix.baseurl }}/extras/x86_64/os/"
+              fi
+            else
+              export BASEURL="${{ matrix.baseurl }}/BaseOS/x86_64/os/"
+              export APPSTREAMURL="${{ matrix.baseurl }}/AppStream/x86_64/os/"
+              export EXTRASURL="${{ matrix.baseurl }}/extras/x86_64/os/"
+            fi
+
+            echo "=== Sanity: repomd.xml check ==="
+            for R in "$BASEURL" "$APPSTREAMURL" "$EXTRASURL"; do
+              echo "Check: $R"
+              curl -sfI "${R}repodata/repomd.xml" >/dev/null || { echo "ERROR: Missing repomd.xml at $R"; exit 7; }
+            done
+
             echo "=== Render kickstart from template for Rocky${{ matrix.rel }} ==="
-            export BASEURL="${{ matrix.baseurl }}/BaseOS/x86_64/os/"
-            export APPSTREAMURL="${{ matrix.baseurl }}/AppStream/x86_64/os/"
-            export EXTRASURL="${{ matrix.baseurl }}/extras/x86_64/os/"
             envsubst < kickstart/ks.template.cfg > /tmp/ks.effective.cfg
 
             echo "=== Validating kickstart ==="
             ksvalidator /tmp/ks.effective.cfg
 
-            echo "=== Debug: Verify repositories ==="
-            echo ">>> dnf repolist:"
+            echo "=== Debug: Verify repositories inside container ==="
             dnf repolist || true
-            echo ""
-            echo ">>> Test: query base package availability"
+            echo ">>> base package availability:"
             dnf repoquery --available bash || echo "Warning: repoquery failed"
-            echo ""
 
             chmod +x scripts/mkiso.sh
             ISO_NAME="OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-$(date +%Y%m%d)"
