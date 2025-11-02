@@ -1,46 +1,59 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# -------------------------------------------------------------------
+# Variablen / Parameter
+# -------------------------------------------------------------------
 KS=${1:-kickstart/ks.cfg}
 OUTDIR=${2:-build}
-ISO_NAME=${ISO_NAME:-OS-LVirt-Migrationassistant-$(date +%Y%m%d)}
-ISO_LABEL=${ISO_LABEL:-OS_LVIRT_P2V}
-RELEASEVER=${RELEASEVER:-9}
+RELEASEVER=${RELEASEVER:-9}  # wird im CI übergeben (z.B. 9 oder 10)
+TAG=${TAG:-stable}            # optionales Label (z.B. stable/beta)
+ISO_DATE=$(date +%Y%m%d)
+ISO_NAME=${ISO_NAME:-OS-LVirt-Migrationassistant-${RELEASEVER}-${TAG}-${ISO_DATE}}
+ISO_LABEL=${ISO_LABEL:-OS_LVIRT_P2V_${RELEASEVER}}
+LOGFILE="${OUTDIR}.log"
 
-# --- livemedia-creator verlangt NICHT existierendes results_dir ---
+# -------------------------------------------------------------------
+# Vorbereitungen
+# -------------------------------------------------------------------
 if [ -d "${OUTDIR}" ]; then
   echo "Removing existing result directory: ${OUTDIR}"
   rm -rf "${OUTDIR}"
 fi
 
-# Dependencies (Container/Host)
+# Dracut/lorax Abhängigkeiten (werden meist im Container installiert)
 dnf -y install lorax lorax-lmc-virt anaconda-tui pykickstart || true
 
-# Kickstart validation
+# Kickstart prüfen
 if ! command -v ksvalidator >/dev/null 2>&1; then
   echo "ERROR: ksvalidator not found"; exit 1
 fi
 ksvalidator "${KS}"
 
-# Optional: reproducible timestamp
+# reproducible timestamp
 export SOURCE_DATE_EPOCH=$(date -r "${KS}" +%s 2>/dev/null || date +%s)
 
-# --- Run LMC build (creates OUTDIR itself) ---
+# -------------------------------------------------------------------
+# livemedia-creator Build
+# -------------------------------------------------------------------
+echo "Starting livemedia-creator build for Rocky ${RELEASEVER} (${TAG})"
 livemedia-creator \
   --make-iso \
   --ks "${KS}" \
   --no-virt \
-  --project "OS-LVirt-Migrationassistant" \
+  --project "OS-LVirt-Migrationassistant-${RELEASEVER}" \
   --releasever "${RELEASEVER}" \
   --volid "${ISO_LABEL}" \
   --iso-only \
   --iso-name "${ISO_NAME}.iso" \
   --resultdir "${OUTDIR}" \
-  --logfile "${OUTDIR}.log"
+  --logfile "${LOGFILE}"
 
-# --- Post tasks ---
+# -------------------------------------------------------------------
+# Checksums
+# -------------------------------------------------------------------
 pushd "${OUTDIR}" >/dev/null
 sha256sum "${ISO_NAME}.iso" > "${ISO_NAME}.iso.sha256"
 popd >/dev/null
 
-echo "ISO ready: ${OUTDIR}/${ISO_NAME}.iso"
+echo "✅ ISO ready: ${OUTDIR}/${ISO_NAME}.iso"
