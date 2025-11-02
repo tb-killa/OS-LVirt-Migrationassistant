@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: '30 2 * * *'   # täglich 02:30 UTC
 
+env:
+  IMAGE_ROCKY9: rockylinux:9
+  IMAGE_ROCKY10: rockylinux:10
+
 jobs:
   build:
     runs-on: ubuntu-latest
