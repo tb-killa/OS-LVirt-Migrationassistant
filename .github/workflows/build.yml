@@ -13,8 +13,17 @@ env:
 
 jobs:
   build:
-    name: Build ISO (Rocky container)
+    name: Build ISO (${{ matrix.rel }} ${{ matrix.tag }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rel: "9"
+            tag: "stable"
+            baseurl: "http://dl.rockylinux.org/pub/rocky/9"
+          - rel: "10"
+            tag: "beta"
+            baseurl: "http://dl.rockylinux.org/pub/rocky/devel/10"
 
     steps:
       - uses: actions/checkout@v4
@@ -23,21 +32,13 @@ jobs:
         id: baseimg
         run: |
           set -e
-          echo "Checking availability of $IMAGE_ROCKY10..."
-          if docker manifest inspect "$IMAGE_ROCKY10" >/dev/null 2>&1; then
-            echo "base=$IMAGE_ROCKY10" >> $GITHUB_OUTPUT
+          echo "Checking availability of rockylinux:${{ matrix.rel }}..."
+          if docker manifest inspect "rockylinux:${{ matrix.rel }}" >/dev/null 2>&1; then
+            echo "base=rockylinux:${{ matrix.rel }}" >> $GITHUB_OUTPUT
           else
-            echo "rockylinux:10 not found — falling back to rockylinux:9"
-            echo "base=$IMAGE_ROCKY9" >> $GITHUB_OUTPUT
+            echo "rockylinux:${{ matrix.rel }} not found — falling back to rockylinux:9"
+            echo "base=rockylinux:9" >> $GITHUB_OUTPUT
           fi
-
-      - name: Cache DNF packages
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/dnf
-          key: ${{ runner.os }}-dnf-${{ hashFiles('**/kickstart/*.cfg') }}
-          restore-keys: |
-            ${{ runner.os }}-dnf-
 
       - name: Build ISO inside Rocky container
         uses: addnab/docker-run-action@v3
@@ -46,56 +47,66 @@ jobs:
           options: -v ${{ github.workspace }}:/workspace -w /workspace
           run: |
             set -eux
-            echo "=== Environment ==="
-            uname -a
-            cat /etc/redhat-release || true
-            echo "===================="
+            echo "=== Preparing Repo Definitions for Rocky${{ matrix.rel }} ==="
+            dnf -y install ca-certificates dnf dnf-plugins-core curl
+            cat > /etc/yum.repos.d/rocky.repo <<EOF
+[baseos]
+name=Rocky${{ matrix.rel }} BaseOS
+baseurl=${{ matrix.baseurl }}/BaseOS/x86_64/os/
+enabled=1
+gpgcheck=0
 
-            # Build dependencies
+[appstream]
+name=Rocky${{ matrix.rel }} AppStream
+baseurl=${{ matrix.baseurl }}/AppStream/x86_64/os/
+enabled=1
+gpgcheck=0
+
+[extras]
+name=Rocky${{ matrix.rel }} Extras
+baseurl=${{ matrix.baseurl }}/extras/x86_64/os/
+enabled=1
+gpgcheck=0
+EOF
+
             dnf -y install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
-
-            # Kickstart validity check
             ksvalidator kickstart/ks.cfg
-
-            # Run ISO build in /tmp to avoid /workspace conflicts
             chmod +x scripts/mkiso.sh
-            ISO_NAME="OS-LVirt-Migrationassistant-$(date +%Y%m%d)"
-            scripts/mkiso.sh kickstart/ks.cfg /tmp/build
 
-            # Generate changelog inside container
+            ISO_NAME="OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-$(date +%Y%m%d)"
+            RELEASEVER=${{ matrix.rel }} scripts/mkiso.sh kickstart/ks.cfg /tmp/build
             chmod +x tools/gen-changelog.sh
             tools/gen-changelog.sh /tmp/build/CHANGELOG.md
-
-            # Copy results back into mounted workspace
-            mkdir -p build
-            cp -v /tmp/build/* build/
-
-            # Pack artifacts
-            cd build
-            tar -czf OS-LVirt-Migrationassistant-${GITHUB_RUN_NUMBER}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
+            mkdir -p build/${{ matrix.rel }}
+            cp -v /tmp/build/* build/${{ matrix.rel }}/
+            cd build/${{ matrix.rel }}
+            tar -czf OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-${GITHUB_RUN_NUMBER}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: iso-artifacts
+          name: iso-artifacts-${{ matrix.rel }}
           path: |
-            build/*.tar.gz
-            build/*.iso
-            build/*.iso.sha256
-            build/lmc.log
-            build/CHANGELOG.md
+            build/${{ matrix.rel }}/*.tar.gz
+            build/${{ matrix.rel }}/*.iso
+            build/${{ matrix.rel }}/*.iso.sha256
+            build/${{ matrix.rel }}/lmc.log
+            build/${{ matrix.rel }}/CHANGELOG.md
 
       - name: Build summary
         run: |
           echo "## Build Summary $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "Release: Rocky${{ matrix.rel }} (${{ matrix.tag }})" >> $GITHUB_STEP_SUMMARY
           echo "Container Base Image: ${{ steps.baseimg.outputs.base }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          ls -lh build/*.iso | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          ls -lh build/${{ matrix.rel }}/*.iso | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          sha256sum build/*.iso | sed 's/^/    /' >> $GITHUB_STEP_SUMMARY
+          sha256sum build/${{ matrix.rel }}/*.iso | sed 's/^/    /' >> $GITHUB_STEP_SUMMARY
 
+  # (Optional) Smoke tests only for stable
   test:
-    name: Smoke tests (QEMU BIOS & UEFI)
+    name: Smoke tests (QEMU BIOS & UEFI, stable only)
+    if: matrix.rel == '9'
     runs-on: ubuntu-latest
     needs: build
     strategy:
@@ -105,7 +116,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: iso-artifacts
+          name: iso-artifacts-9
           path: dist
 
       - name: Install QEMU (+OVMF for UEFI)
