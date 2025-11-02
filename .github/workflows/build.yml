@@ -1,0 +1,95 @@
+name: build-and-test-iso
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+  schedule:
+    - cron: "17 2 * * *"  # täglich 02:17 UTC
+
+jobs:
+  build:
+    name: Build ISO (Rocky 10 container)
+    runs-on: ubuntu-latest
+    container: rockylinux:10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache DNF packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/dnf
+          key: ${{ runner.os }}-dnf-${{ hashFiles('**/kickstart/*.cfg') }}
+          restore-keys: |
+            ${{ runner.os }}-dnf-
+
+      - name: Install build deps
+        run: |
+          dnf -y install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
+
+      - name: Validate Kickstart (ksvalidator)
+        run: |
+          ksvalidator kickstart/ks.cfg
+
+      - name: Build ISO
+        run: |
+          chmod +x scripts/mkiso.sh
+          ISO_NAME="OS-LVirt-Migrationassistant-$(date +%Y%m%d)" \
+          scripts/mkiso.sh kickstart/ks.cfg build
+
+      - name: Generate changelog
+        run: |
+          chmod +x tools/gen-changelog.sh
+          tools/gen-changelog.sh build/CHANGELOG.md
+
+      - name: Compress artifacts
+        run: |
+          cd build
+          tar -czf OS-LVirt-Migrationassistant-${{ github.run_number }}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iso-artifacts
+          path: |
+            build/*.tar.gz
+            build/*.iso
+            build/*.iso.sha256
+            build/lmc.log
+            build/CHANGELOG.md
+
+      - name: Build summary
+        run: |
+          echo "## Build Summary $(date)" >> $GITHUB_STEP_SUMMARY
+          ls -lh build/*.iso | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          sha256sum build/*.iso | sed 's/^/    /' >> $GITHUB_STEP_SUMMARY
+
+  test:
+    name: Smoke tests (QEMU BIOS & UEFI)
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        mode: [bios, uefi]
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: iso-artifacts, path: dist }
+
+      - name: Install QEMU (+OVMF for UEFI)
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.mode }}" = "uefi" ]; then
+            sudo apt-get -y install qemu-system-x86 ovmf
+          else
+            sudo apt-get -y install qemu-system-x86
+          fi
+
+      - name: Run smoke test
+        run: |
+          chmod +x test/qemu-smoke-bios.sh test/qemu-smoke-uefi.sh
+          ISO=$(ls dist/*.iso | head -n1)
+          if [ "${{ matrix.mode }}" = "uefi" ]; then
+            test/qemu-smoke-uefi.sh "$ISO"
+          else
+            test/qemu-smoke-bios.sh "$ISO"
+          fi
