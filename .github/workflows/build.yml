@@ -25,7 +25,7 @@ jobs:
             baseurl: "http://dl.rockylinux.org/pub/rocky/9"
           - rel: "10"
             tag: "beta"
-            baseurl: "http://dl.rockylinux.org/pub/rocky/devel/10"
+            baseurl: "http://download.rockylinux.org/pub/rocky/development/10"
 
     steps:
       - uses: actions/checkout@v4
@@ -48,33 +48,35 @@ jobs:
           options: -v ${{ github.workspace }}:/workspace -w /workspace
           run: |
             set -eux
-            echo "=== Preparing Repo Definitions for Rocky${{ matrix.rel }} ==="
+            echo "=== Preparing Build Environment for Rocky${{ matrix.rel }} ==="
 
+            # --- Fix curl-minimal conflicts ---
             dnf clean all
             dnf -y --allowerasing --nobest install ca-certificates dnf dnf-plugins-core curl || \
             dnf -y reinstall ca-certificates
 
-            # Repos für Tool-Installation im Container
-            cat > /etc/yum.repos.d/rocky.repo <<EOF
-            [baseos]
-            name=Rocky${{ matrix.rel }} BaseOS
+            # --- Build-only Repositories (unique names) ---
+            cat > /etc/yum.repos.d/rocky-build.repo <<EOF
+            [build-baseos]
+            name=Rocky${{ matrix.rel }} Build BaseOS
             baseurl=${{ matrix.baseurl }}/BaseOS/x86_64/os/
             enabled=1
             gpgcheck=0
             
-            [appstream]
-            name=Rocky${{ matrix.rel }} AppStream
+            [build-appstream]
+            name=Rocky${{ matrix.rel }} Build AppStream
             baseurl=${{ matrix.baseurl }}/AppStream/x86_64/os/
             enabled=1
             gpgcheck=0
             
-            [extras]
-            name=Rocky${{ matrix.rel }} Extras
+            [build-extras]
+            name=Rocky${{ matrix.rel }} Build Extras
             baseurl=${{ matrix.baseurl }}/extras/x86_64/os/
             enabled=1
             gpgcheck=0
             EOF
 
+            # --- Base dependencies for lorax ---
             dnf -y --allowerasing --nobest install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git gettext
 
             echo "=== Render kickstart from template for Rocky${{ matrix.rel }} ==="
@@ -85,6 +87,14 @@ jobs:
 
             echo "=== Validating kickstart ==="
             ksvalidator /tmp/ks.effective.cfg
+
+            echo "=== Debug: Verify repositories ==="
+            echo ">>> dnf repolist:"
+            dnf repolist || true
+            echo ""
+            echo ">>> Test: query base package availability"
+            dnf repoquery --available bash || echo "Warning: repoquery failed"
+            echo ""
 
             chmod +x scripts/mkiso.sh
             ISO_NAME="OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-$(date +%Y%m%d)"
