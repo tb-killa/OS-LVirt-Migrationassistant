@@ -37,7 +37,8 @@ jobs:
         run: |
           echo "=== Installing pykickstart locally ==="
           sudo apt-get update -qq
-          sudo apt-get -y install python3-pykickstart gettext
+          sudo apt-get -y install python3-pip gettext
+          pip install pykickstart
 
           echo "=== Basic validation of ks.template.cfg ==="
           ksvalidator kickstart/ks.template.cfg || { echo "❌ Kickstart validation failed"; exit 1; }
