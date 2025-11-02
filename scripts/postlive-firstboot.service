@@ -1,0 +1,10 @@
+[Unit]
+Description=Initial storage auto-detect (RO mounts for P2V)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/auto-detect-storage.sh
+
+[Install]
+WantedBy=multi-user.target
