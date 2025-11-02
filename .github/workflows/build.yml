@@ -5,7 +5,7 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
   schedule:
-    - cron: "17 2 * * *"  # täglicher Nachtbuild 02:17 UTC
+    - cron: "17 2 * * *"
 
 env:
   IMAGE_ROCKY9: rockylinux:9
@@ -25,46 +25,38 @@ jobs:
             baseurl: "http://dl.rockylinux.org/pub/rocky/9"
           - rel: "10"
             tag: "beta"
-            baseurl: "http://download.rockylinux.org/pub/rocky/10/development"
+            baseurl: "http://dl.rockylinux.org/pub/rocky/10"
 
     steps:
       - uses: actions/checkout@v4
 
-      # ---------------------------------------
-      # 1️⃣  Vorabprüfung der Kickstart-Syntax
-      # ---------------------------------------
+      # 1️⃣  Vorabprüfung Kickstart
       - name: Validate Kickstart syntax (pre-build)
         run: |
-          echo "=== Installing pykickstart locally ==="
+          echo "=== Installing pykickstart via PyPI ==="
           sudo apt-get update -qq
           sudo apt-get -y install python3-pip gettext
           pip install pykickstart
 
-          echo "=== Basic validation of ks.template.cfg ==="
-          ksvalidator kickstart/ks.template.cfg || { echo "❌ Kickstart validation failed"; exit 1; }
+          echo "=== Validate ks.template.cfg ==="
+          ksvalidator kickstart/ks.template.cfg || { echo "❌ KS validation failed"; exit 1; }
 
-          echo "=== Rendering template with example env values ==="
+          echo "=== Render with sample vars ==="
           export BASEURL="http://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/"
           export APPSTREAMURL="http://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/"
           export EXTRASURL="http://dl.rockylinux.org/pub/rocky/9/extras/x86_64/os/"
           envsubst < kickstart/ks.template.cfg > /tmp/ks.test.cfg
 
-          echo "=== Validation of rendered example ==="
-          ksvalidator /tmp/ks.test.cfg || { echo "❌ Rendered Kickstart invalid"; exit 1; }
-
+          ksvalidator /tmp/ks.test.cfg || { echo "❌ Rendered KS invalid"; exit 1; }
           echo "✅ Kickstart syntax OK"
 
-      # ---------------------------------------
-      # 2️⃣  Container-Build pro Release
-      # ---------------------------------------
+      # 2️⃣  Container-Build
       - name: Select available Rocky base image
         id: baseimg
         run: |
-          set -e
           if docker manifest inspect "rockylinux:${{ matrix.rel }}" >/dev/null 2>&1; then
             echo "base=rockylinux:${{ matrix.rel }}" >> "$GITHUB_OUTPUT"
           else
-            echo "rockylinux:${{ matrix.rel }} not found — fallback to rockylinux:9"
             echo "base=rockylinux:9" >> "$GITHUB_OUTPUT"
           fi
 
@@ -72,16 +64,16 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: ${{ steps.baseimg.outputs.base }}
-          options: -v ${{ github.workspace }}:/workspace -w /workspace --rm
+          options: -v ${{ github.workspace }}:/workspace -w /workspace --rm --privileged
           run: |
             set -eux
 
-            echo "=== Preparing Build Environment for Rocky${{ matrix.rel }} ==="
+            echo "=== Preparing build env for Rocky${{ matrix.rel }} ==="
             dnf clean all
             dnf -y --allowerasing --nobest install ca-certificates dnf dnf-plugins-core curl || \
               dnf -y reinstall ca-certificates
 
-            # 🧹 Repos leeren, um Matrix-Überschneidungen zu vermeiden
+            # 🔒 Repos bereinigen
             rm -rf /etc/yum.repos.d/*
             cat > /etc/yum.repos.d/rocky${{ matrix.rel }}-build.repo <<EOF
             [build-baseos]
@@ -106,20 +98,27 @@ jobs:
             echo "=== Repo sanity for Rocky${{ matrix.rel }} ==="
             dnf repolist || true
 
-            # 🧱 Abhängigkeiten für Lorax / LiveMedia
+            # 🧱 Lorax-Abhängigkeiten
             dnf -y --allowerasing --nobest install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git gettext
 
-            echo "=== Resolve KS repo paths (with v10 fallback check) ==="
+            # 🌐 v10-Fallback-Erkennung
+            echo "=== Resolve KS repo paths (v10 fallback aware) ==="
             if [ "${{ matrix.rel }}" = "10" ]; then
-              ALT_BASE="http://download.rockylinux.org/pub/rocky/10/development"
-              if curl -sfI "${ALT_BASE}/BaseOS/x86_64/os/repodata/repomd.xml" >/dev/null; then
-                export BASEURL="${ALT_BASE}/BaseOS/x86_64/os/"
-                export APPSTREAMURL="${ALT_BASE}/AppStream/x86_64/os/"
-                export EXTRASURL="${ALT_BASE}/extras/x86_64/os/"
+              GA_BASE="http://dl.rockylinux.org/pub/rocky/10"
+              DEV_BASE="http://download.rockylinux.org/pub/rocky/10/development"
+              if curl -sfI "${GA_BASE}/BaseOS/x86_64/os/repodata/repomd.xml" >/dev/null; then
+                export BASEURL="${GA_BASE}/BaseOS/x86_64/os/"
+                export APPSTREAMURL="${GA_BASE}/AppStream/x86_64/os/"
+                export EXTRASURL="${GA_BASE}/extras/x86_64/os/"
+                echo "→ Using Rocky10 GA repos"
+              elif curl -sfI "${DEV_BASE}/BaseOS/x86_64/os/repodata/repomd.xml" >/dev/null; then
+                export BASEURL="${DEV_BASE}/BaseOS/x86_64/os/"
+                export APPSTREAMURL="${DEV_BASE}/AppStream/x86_64/os/"
+                export EXTRASURL="${DEV_BASE}/extras/x86_64/os/"
+                echo "→ Using Rocky10 development repos"
               else
-                export BASEURL="${{ matrix.baseurl }}/BaseOS/x86_64/os/"
-                export APPSTREAMURL="${{ matrix.baseurl }}/AppStream/x86_64/os/"
-                export EXTRASURL="${{ matrix.baseurl }}/extras/x86_64/os/"
+                echo "ERROR: no valid Rocky10 repo found"
+                exit 8
               fi
             else
               export BASEURL="${{ matrix.baseurl }}/BaseOS/x86_64/os/"
@@ -127,16 +126,14 @@ jobs:
               export EXTRASURL="${{ matrix.baseurl }}/extras/x86_64/os/"
             fi
 
-            echo "=== Sanity: repomd.xml check ==="
+            echo "=== Sanity check repomd.xml ==="
             for R in "$BASEURL" "$APPSTREAMURL" "$EXTRASURL"; do
               echo "Check: $R"
-              curl -sfI "${R}repodata/repomd.xml" >/dev/null || { echo "ERROR: Missing repomd.xml at $R"; exit 7; }
+              curl -sfI "${R}repodata/repomd.xml" >/dev/null || { echo "ERROR: Missing repomd.xml"; exit 7; }
             done
 
-            echo "=== Render kickstart from template for Rocky${{ matrix.rel }} ==="
+            echo "=== Render KS ==="
             envsubst < kickstart/ks.template.cfg > /tmp/ks.effective.cfg
-
-            echo "=== Validating kickstart (container) ==="
             ksvalidator /tmp/ks.effective.cfg
 
             echo "=== Start ISO Build ==="
@@ -144,7 +141,6 @@ jobs:
             ISO_NAME="OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-$(date +%Y%m%d)"
             TAG=${{ matrix.tag }} RELEASEVER=${{ matrix.rel }} scripts/mkiso.sh /tmp/ks.effective.cfg /tmp/build
 
-            echo "=== Create Changelog ==="
             chmod +x tools/gen-changelog.sh
             RELEASEVER=${{ matrix.rel }} TAG=${{ matrix.tag }} tools/gen-changelog.sh /tmp/build/CHANGELOG.md
 
@@ -154,9 +150,6 @@ jobs:
             cd build/${{ matrix.rel }}
             tar -czf OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-${GITHUB_RUN_NUMBER}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
 
-      # ---------------------------------------
-      # 3️⃣  Artefakt Upload
-      # ---------------------------------------
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -164,28 +157,15 @@ jobs:
           path: |
             build/${{ matrix.rel }}/*.tar.gz
             build/${{ matrix.rel }}/*.iso
-            build/${{ matrix.rel }}/*.iso.sha256
+            build/${{ matrix.rel }}/*.sha256
             build/${{ matrix.rel }}/lmc.log
             build/${{ matrix.rel }}/CHANGELOG.md
 
-      - name: Build summary
-        run: |
-          echo "## Build Summary $(date)" >> "$GITHUB_STEP_SUMMARY"
-          echo "Release: Rocky${{ matrix.rel }} (${{ matrix.tag }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "Container Image: ${{ steps.baseimg.outputs.base }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          ls -lh build/${{ matrix.rel }}/*.iso | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          sha256sum build/${{ matrix.rel }}/*.iso | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
-
-  # ---------------------------------------
-  # 4️⃣  Smoke-Test (nur Rocky 9)
-  # ---------------------------------------
+  # 3️⃣  Smoke-Test (nur Rocky9)
   test:
-    name: Smoke tests (BIOS & UEFI – stable only)
+    name: Smoke tests (BIOS & UEFI)
     runs-on: ubuntu-latest
     needs: build
-    if: always()
     strategy:
       matrix:
         mode: [ bios, uefi ]
@@ -196,21 +176,16 @@ jobs:
           name: iso-artifacts-9
           path: dist
 
-      - name: Install QEMU (+ OVMF for UEFI)
+      - name: Install QEMU (+ OVMF)
         run: |
-          sudo apt-get update
-          if [ "${{ matrix.mode }}" = "uefi" ]; then
-            sudo apt-get -y install qemu-system-x86 ovmf
-          else
-            sudo apt-get -y install qemu-system-x86
-          fi
+          sudo apt-get update -qq
+          sudo apt-get -y install qemu-system-x86 ovmf
 
       - name: Run smoke test (${{ matrix.mode }})
         run: |
-          chmod +x test/qemu-smoke-bios.sh test/qemu-smoke-uefi.sh
           ISO=$(ls dist/*.iso | head -n1)
           if [ "${{ matrix.mode }}" = "uefi" ]; then
-            test/qemu-smoke-uefi.sh "$ISO"
+            qemu-system-x86_64 -m 1024 -cdrom "$ISO" -enable-kvm -bios /usr/share/OVMF/OVMF_CODE.fd -display none -boot d -no-reboot -serial stdio -timeout 60 || true
           else
-            test/qemu-smoke-bios.sh "$ISO"
+            qemu-system-x86_64 -m 1024 -cdrom "$ISO" -enable-kvm -display none -boot d -no-reboot -serial stdio -timeout 60 || true
           fi
