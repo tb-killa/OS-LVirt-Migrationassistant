@@ -7,10 +7,10 @@ ISO_NAME=${ISO_NAME:-OS-LVirt-Migrationassistant-$(date +%Y%m%d)}
 ISO_LABEL=${ISO_LABEL:-OS_LVIRT_P2V}
 RELEASEVER=${RELEASEVER:-10}
 
-# Remove existing build folder if present (LMC requires clean dir)
+# --- livemedia-creator verlangt NICHT existierendes results_dir ---
 if [ -d "${OUTDIR}" ]; then
-  echo "Cleaning existing build directory: ${OUTDIR}"
-  rm -rf "${OUTDIR:?}/"*
+  echo "Removing existing result directory: ${OUTDIR}"
+  rm -rf "${OUTDIR}"
 fi
 
 # Dependencies (Container/Host)
@@ -25,7 +25,7 @@ ksvalidator "${KS}"
 # Optional: reproducible timestamp
 export SOURCE_DATE_EPOCH=$(date -r "${KS}" +%s 2>/dev/null || date +%s)
 
-# Run LMC build (creates OUTDIR automatically)
+# --- Run LMC build (creates OUTDIR itself) ---
 livemedia-creator \
   --make-iso \
   --ks "${KS}" \
@@ -36,9 +36,9 @@ livemedia-creator \
   --iso-only \
   --iso-name "${ISO_NAME}.iso" \
   --resultdir "${OUTDIR}" \
-  --logfile "${OUTDIR}/lmc.log"
+  --logfile "${OUTDIR}.log"
 
-# Checksums
+# --- Post tasks ---
 pushd "${OUTDIR}" >/dev/null
 sha256sum "${ISO_NAME}.iso" > "${ISO_NAME}.iso.sha256"
 popd >/dev/null
