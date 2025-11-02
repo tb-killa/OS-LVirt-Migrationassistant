@@ -5,7 +5,7 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
   schedule:
-    - cron: "17 2 * * *"  # täglich 02:17 UTC
+    - cron: "17 2 * * *"  # täglicher Nachtbuild 02:17 UTC
 
 env:
   IMAGE_ROCKY9: rockylinux:9
@@ -30,6 +30,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ---------------------------------------
+      # 1️⃣  Vorabprüfung der Kickstart-Syntax
+      # ---------------------------------------
+      - name: Validate Kickstart syntax (pre-build)
+        run: |
+          echo "=== Installing pykickstart locally ==="
+          sudo apt-get update -qq
+          sudo apt-get -y install python3-pykickstart gettext
+
+          echo "=== Basic validation of ks.template.cfg ==="
+          ksvalidator kickstart/ks.template.cfg || { echo "❌ Kickstart validation failed"; exit 1; }
+
+          echo "=== Rendering template with example env values ==="
+          export BASEURL="http://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/"
+          export APPSTREAMURL="http://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/"
+          export EXTRASURL="http://dl.rockylinux.org/pub/rocky/9/extras/x86_64/os/"
+          envsubst < kickstart/ks.template.cfg > /tmp/ks.test.cfg
+
+          echo "=== Validation of rendered example ==="
+          ksvalidator /tmp/ks.test.cfg || { echo "❌ Rendered Kickstart invalid"; exit 1; }
+
+          echo "✅ Kickstart syntax OK"
+
+      # ---------------------------------------
+      # 2️⃣  Container-Build pro Release
+      # ---------------------------------------
       - name: Select available Rocky base image
         id: baseimg
         run: |
@@ -45,18 +71,18 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: ${{ steps.baseimg.outputs.base }}
-          options: -v ${{ github.workspace }}:/workspace -w /workspace
+          options: -v ${{ github.workspace }}:/workspace -w /workspace --rm
           run: |
             set -eux
-            echo "=== Preparing Build Environment for Rocky${{ matrix.rel }} ==="
 
-            # --- Fix curl-minimal conflicts ---
+            echo "=== Preparing Build Environment for Rocky${{ matrix.rel }} ==="
             dnf clean all
             dnf -y --allowerasing --nobest install ca-certificates dnf dnf-plugins-core curl || \
-            dnf -y reinstall ca-certificates
+              dnf -y reinstall ca-certificates
 
-            # --- Build-only Repositories (unique names) ---
-            cat > /etc/yum.repos.d/rocky-build.repo <<EOF
+            # 🧹 Repos leeren, um Matrix-Überschneidungen zu vermeiden
+            rm -rf /etc/yum.repos.d/*
+            cat > /etc/yum.repos.d/rocky${{ matrix.rel }}-build.repo <<EOF
             [build-baseos]
             name=Rocky${{ matrix.rel }} Build BaseOS
             baseurl=${{ matrix.baseurl }}/BaseOS/x86_64/os/
@@ -76,7 +102,10 @@ jobs:
             gpgcheck=0
             EOF
 
-            # --- Base dependencies for lorax ---
+            echo "=== Repo sanity for Rocky${{ matrix.rel }} ==="
+            dnf repolist || true
+
+            # 🧱 Abhängigkeiten für Lorax / LiveMedia
             dnf -y --allowerasing --nobest install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git gettext
 
             echo "=== Resolve KS repo paths (with v10 fallback check) ==="
@@ -106,18 +135,15 @@ jobs:
             echo "=== Render kickstart from template for Rocky${{ matrix.rel }} ==="
             envsubst < kickstart/ks.template.cfg > /tmp/ks.effective.cfg
 
-            echo "=== Validating kickstart ==="
+            echo "=== Validating kickstart (container) ==="
             ksvalidator /tmp/ks.effective.cfg
 
-            echo "=== Debug: Verify repositories inside container ==="
-            dnf repolist || true
-            echo ">>> base package availability:"
-            dnf repoquery --available bash || echo "Warning: repoquery failed"
-
+            echo "=== Start ISO Build ==="
             chmod +x scripts/mkiso.sh
             ISO_NAME="OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-$(date +%Y%m%d)"
             TAG=${{ matrix.tag }} RELEASEVER=${{ matrix.rel }} scripts/mkiso.sh /tmp/ks.effective.cfg /tmp/build
 
+            echo "=== Create Changelog ==="
             chmod +x tools/gen-changelog.sh
             RELEASEVER=${{ matrix.rel }} TAG=${{ matrix.tag }} tools/gen-changelog.sh /tmp/build/CHANGELOG.md
 
@@ -127,6 +153,9 @@ jobs:
             cd build/${{ matrix.rel }}
             tar -czf OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-${GITHUB_RUN_NUMBER}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
 
+      # ---------------------------------------
+      # 3️⃣  Artefakt Upload
+      # ---------------------------------------
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -148,6 +177,9 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           sha256sum build/${{ matrix.rel }}/*.iso | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
+  # ---------------------------------------
+  # 4️⃣  Smoke-Test (nur Rocky 9)
+  # ---------------------------------------
   test:
     name: Smoke tests (BIOS & UEFI – stable only)
     runs-on: ubuntu-latest
