@@ -7,13 +7,29 @@ on:
   schedule:
     - cron: "17 2 * * *"  # täglich 02:17 UTC
 
+env:
+  IMAGE_ROCKY9: rockylinux:9
+  IMAGE_ROCKY10: rockylinux:10
+
 jobs:
   build:
-    name: Build ISO (Rocky 10 container)
+    name: Build ISO (Rocky container)
     runs-on: ubuntu-latest
-    container: rockylinux:10
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select available Rocky base image
+        id: baseimg
+        run: |
+          set -e
+          echo "Checking availability of $IMAGE_ROCKY10..."
+          if docker manifest inspect "$IMAGE_ROCKY10" >/dev/null 2>&1; then
+            echo "base=$IMAGE_ROCKY10" >> $GITHUB_OUTPUT
+          else
+            echo "rockylinux:10 not found — falling back to rockylinux:9"
+            echo "base=$IMAGE_ROCKY9" >> $GITHUB_OUTPUT
+          fi
 
       - name: Cache DNF packages
         uses: actions/cache@v4
@@ -23,31 +39,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-dnf-
 
-      - name: Install build deps
-        run: |
-          dnf -y install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
+      - name: Build ISO inside Rocky container
+        uses: addnab/docker-run-action@v3
+        with:
+          image: ${{ steps.baseimg.outputs.base }}
+          options: -v ${{ github.workspace }}:/workspace -w /workspace
+          run: |
+            set -eux
+            dnf -y install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
+            ksvalidator kickstart/ks.cfg
+            chmod +x scripts/mkiso.sh
+            ISO_NAME="OS-LVirt-Migrationassistant-$(date +%Y%m%d)" \
+              scripts/mkiso.sh kickstart/ks.cfg build
+            chmod +x tools/gen-changelog.sh
+            tools/gen-changelog.sh build/CHANGELOG.md
+            cd build
+            tar -czf OS-LVirt-Migrationassistant-${GITHUB_RUN_NUMBER}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
 
-      - name: Validate Kickstart (ksvalidator)
-        run: |
-          ksvalidator kickstart/ks.cfg
-
-      - name: Build ISO
-        run: |
-          chmod +x scripts/mkiso.sh
-          ISO_NAME="OS-LVirt-Migrationassistant-$(date +%Y%m%d)" \
-          scripts/mkiso.sh kickstart/ks.cfg build
-
-      - name: Generate changelog
-        run: |
-          chmod +x tools/gen-changelog.sh
-          tools/gen-changelog.sh build/CHANGELOG.md
-
-      - name: Compress artifacts
-        run: |
-          cd build
-          tar -czf OS-LVirt-Migrationassistant-${{ github.run_number }}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
-
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: iso-artifacts
@@ -61,7 +70,10 @@ jobs:
       - name: Build summary
         run: |
           echo "## Build Summary $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "Container Base Image: ${{ steps.baseimg.outputs.base }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           ls -lh build/*.iso | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           sha256sum build/*.iso | sed 's/^/    /' >> $GITHUB_STEP_SUMMARY
 
   test:
@@ -71,9 +83,12 @@ jobs:
     strategy:
       matrix:
         mode: [bios, uefi]
+
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: iso-artifacts, path: dist }
+        with: 
+          name: iso-artifacts
+          path: dist
 
       - name: Install QEMU (+OVMF for UEFI)
         run: |
@@ -84,7 +99,7 @@ jobs:
             sudo apt-get -y install qemu-system-x86
           fi
 
-      - name: Run smoke test
+      - name: Run smoke test (${{ matrix.mode }})
         run: |
           chmod +x test/qemu-smoke-bios.sh test/qemu-smoke-uefi.sh
           ISO=$(ls dist/*.iso | head -n1)
