@@ -1,17 +1,8 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
 # mkiso.sh – ISO Build Script for OS-LVirt-Migrationassistant
-#
-# This script wraps livemedia-creator for reproducible, container-safe builds.
-# It is designed for use inside GitHub Actions and Rocky Linux containers.
-#
-# Key features:
-#   - uses `--no-virt` and `--image-only` (no /dev/loop needed)
-#   - auto-cleans previous builds
-#   - generates SHA256 checksum
-#   - optional bootable ISO integrity check
+# Compatible with Lorax v34 (Rocky 9) and v40 (Rocky 10)
 # -----------------------------------------------------------------------------
-
 set -euxo pipefail
 
 KS_FILE="$1"
@@ -19,16 +10,22 @@ OUTDIR="$2"
 
 echo "=== OS-LVirt mkiso.sh – Starting ISO build ==="
 echo "Kickstart: $KS_FILE"
-echo "Output dir: $OUTDIR"
+echo "Output dir (final): $OUTDIR"
 echo ""
 
 # -----------------------------------------------------------------------------
-# 🧹 Cleanup previous runs
+# 🧹 Cleanup previous runs (final dir only)
 # -----------------------------------------------------------------------------
 if [ -d "$OUTDIR" ]; then
   echo "Removing previous result dir: $OUTDIR"
   rm -rf "$OUTDIR"
 fi
+
+# -----------------------------------------------------------------------------
+# 📁 Create temp working dir (Lorax-safe)
+# -----------------------------------------------------------------------------
+TMPDIR=$(mktemp -d /tmp/oslv-build.XXXXXX)
+echo "Using temp build dir: $TMPDIR"
 
 # -----------------------------------------------------------------------------
 # 🧱 Run livemedia-creator
@@ -42,13 +39,20 @@ livemedia-creator \
   --ks "$KS_FILE" \
   --project "OS-LVirt-Migrationassistant" \
   --volid "OSLVIRT_MIGRATION" \
-  --resultdir "$OUTDIR" \
+  --resultdir "$TMPDIR" \
   --iso-only \
-  --logfile "$OUTDIR/lmc.log"
+  --logfile "$TMPDIR/lmc.log"
 
 echo ""
 echo "=== ISO build complete ==="
-ls -lh "$OUTDIR" || true
+ls -lh "$TMPDIR" || true
+
+# -----------------------------------------------------------------------------
+# 📦 Move final build to output path
+# -----------------------------------------------------------------------------
+echo "Moving build artifacts to: $OUTDIR"
+mkdir -p "$OUTDIR"
+mv "$TMPDIR"/* "$OUTDIR"/ || true
 
 # -----------------------------------------------------------------------------
 # 🧮 Generate SHA256 checksum
@@ -63,7 +67,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 🔍 Optional: Boot image integrity check
+# 🔍 Boot image integrity check
 # -----------------------------------------------------------------------------
 if command -v xorriso >/dev/null 2>&1; then
   echo ""
