@@ -3,7 +3,7 @@ name: build-and-test-iso
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
     - cron: "17 2 * * *"  # täglich 02:17 UTC
 
@@ -15,7 +15,9 @@ jobs:
   build:
     name: Build ISO (${{ matrix.rel }} ${{ matrix.tag }})
     runs-on: ubuntu-latest
+
     strategy:
+      fail-fast: false
       matrix:
         include:
           - rel: "9"
@@ -32,12 +34,11 @@ jobs:
         id: baseimg
         run: |
           set -e
-          echo "Checking availability of rockylinux:${{ matrix.rel }}..."
           if docker manifest inspect "rockylinux:${{ matrix.rel }}" >/dev/null 2>&1; then
-            echo "base=rockylinux:${{ matrix.rel }}" >> $GITHUB_OUTPUT
+            echo "base=rockylinux:${{ matrix.rel }}" >> "$GITHUB_OUTPUT"
           else
             echo "rockylinux:${{ matrix.rel }} not found — falling back to rockylinux:9"
-            echo "base=rockylinux:9" >> $GITHUB_OUTPUT
+            echo "base=rockylinux:9" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build ISO inside Rocky container
@@ -50,35 +51,40 @@ jobs:
             echo "=== Preparing Repo Definitions for Rocky${{ matrix.rel }} ==="
             dnf -y install ca-certificates dnf dnf-plugins-core curl
             cat > /etc/yum.repos.d/rocky.repo <<EOF
-[baseos]
-name=Rocky${{ matrix.rel }} BaseOS
-baseurl=${{ matrix.baseurl }}/BaseOS/x86_64/os/
-enabled=1
-gpgcheck=0
-
-[appstream]
-name=Rocky${{ matrix.rel }} AppStream
-baseurl=${{ matrix.baseurl }}/AppStream/x86_64/os/
-enabled=1
-gpgcheck=0
-
-[extras]
-name=Rocky${{ matrix.rel }} Extras
-baseurl=${{ matrix.baseurl }}/extras/x86_64/os/
-enabled=1
-gpgcheck=0
-EOF
+            [baseos]
+            name=Rocky${{ matrix.rel }} BaseOS
+            baseurl=${{ matrix.baseurl }}/BaseOS/x86_64/os/
+            enabled=1
+            gpgcheck=0
+            
+            [appstream]
+            name=Rocky${{ matrix.rel }} AppStream
+            baseurl=${{ matrix.baseurl }}/AppStream/x86_64/os/
+            enabled=1
+            gpgcheck=0
+            
+            [extras]
+            name=Rocky${{ matrix.rel }} Extras
+            baseurl=${{ matrix.baseurl }}/extras/x86_64/os/
+            enabled=1
+            gpgcheck=0
+            EOF
 
             dnf -y install lorax lorax-lmc-virt anaconda-tui pykickstart qemu-img xz rpm-build make git
-            ksvalidator kickstart/ks.cfg
-            chmod +x scripts/mkiso.sh
 
+            echo "=== Validating kickstart ==="
+            ksvalidator kickstart/ks.cfg
+
+            chmod +x scripts/mkiso.sh
             ISO_NAME="OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-$(date +%Y%m%d)"
-            RELEASEVER=${{ matrix.rel }} scripts/mkiso.sh kickstart/ks.cfg /tmp/build
+            TAG=${{ matrix.tag }} RELEASEVER=${{ matrix.rel }} scripts/mkiso.sh kickstart/ks.cfg /tmp/build
+
             chmod +x tools/gen-changelog.sh
             tools/gen-changelog.sh /tmp/build/CHANGELOG.md
+
             mkdir -p build/${{ matrix.rel }}
             cp -v /tmp/build/* build/${{ matrix.rel }}/
+
             cd build/${{ matrix.rel }}
             tar -czf OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-${GITHUB_RUN_NUMBER}.tar.gz *.iso *.sha256 lmc.log CHANGELOG.md
 
@@ -95,23 +101,22 @@ EOF
 
       - name: Build summary
         run: |
-          echo "## Build Summary $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "Release: Rocky${{ matrix.rel }} (${{ matrix.tag }})" >> $GITHUB_STEP_SUMMARY
-          echo "Container Base Image: ${{ steps.baseimg.outputs.base }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          ls -lh build/${{ matrix.rel }}/*.iso | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          sha256sum build/${{ matrix.rel }}/*.iso | sed 's/^/    /' >> $GITHUB_STEP_SUMMARY
+          echo "## Build Summary $(date)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Release: Rocky${{ matrix.rel }} (${{ matrix.tag }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "Container Image: ${{ steps.baseimg.outputs.base }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          ls -lh build/${{ matrix.rel }}/*.iso | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          sha256sum build/${{ matrix.rel }}/*.iso | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
-  # (Optional) Smoke tests only for stable
   test:
-    name: Smoke tests (QEMU BIOS & UEFI, stable only)
-    if: matrix.rel == '9'
+    name: Smoke tests (BIOS & UEFI, stable only)
     runs-on: ubuntu-latest
     needs: build
     strategy:
       matrix:
-        mode: [bios, uefi]
+        mode: [ bios, uefi ]
+    if: ${{ always() && contains(needs.build.outputs['matrix.rel'], '9') }}
 
     steps:
       - uses: actions/download-artifact@v4
@@ -119,7 +124,7 @@ EOF
           name: iso-artifacts-9
           path: dist
 
-      - name: Install QEMU (+OVMF for UEFI)
+      - name: Install QEMU (+ OVMF for UEFI)
         run: |
           sudo apt-get update
           if [ "${{ matrix.mode }}" = "uefi" ]; then
