@@ -10,7 +10,7 @@ on:
 
 env:
   IMAGE_ROCKY9: rockylinux:9
-  IMAGE_ROCKY10: rockylinux:10
+  IMAGE_ROCKY10: quay.io/rockylinux/rockylinux:10
 
 jobs:
   build:
@@ -21,9 +21,11 @@ jobs:
           - rel: 9
             tag: stable
             baseurl: http://dl.rockylinux.org/pub/rocky/9
+            image: rockylinux:9
           - rel: 10
             tag: beta
             baseurl: http://dl.rockylinux.org/pub/rocky/10
+            image: quay.io/rockylinux/rockylinux:10
     name: Build ISO for Rocky${{ matrix.rel }} (${{ matrix.tag }})
 
     steps:
@@ -44,9 +46,9 @@ jobs:
       - name: Build ISO inside Rocky container
         run: |
           echo "=== Pull container and start build for Rocky${{ matrix.rel }} ==="
-          docker pull rockylinux:${{ matrix.rel }}
+          docker pull "${{ matrix.image }}"
           docker run --rm -v "${{ github.workspace }}":/workspace -w /workspace \
-            rockylinux:${{ matrix.rel }} /bin/bash -e <<'EOF'
+            "${{ matrix.image }}" /bin/bash -e <<'EOF'
 
             echo "=== Preparing environment for Rocky${{ matrix.rel }} ==="
             dnf -y --allowerasing --nobest install \
