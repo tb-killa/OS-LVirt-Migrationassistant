@@ -123,7 +123,9 @@ jobs:
             ISO_NAME="OS-LVirt-Migrationassistant-${{ matrix.rel }}-${{ matrix.tag }}-$(date +%Y%m%d)"
             TAG="${{ matrix.tag }}"
             RELEASEVER="${{ matrix.rel }}"
-            scripts/mkiso.sh /tmp/ks.effective.cfg /tmp/build
+            OUTPUT_DIR="/workspace/build/${{ matrix.rel }}"
+            mkdir -p "$OUTPUT_DIR"
+            scripts/mkiso.sh /tmp/ks.effective.cfg "$OUTPUT_DIR"
 
           EOF
 
@@ -141,7 +143,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get -y install xorriso
-          ISO_FILE="$(ls build/*.iso | head -n1)"
+          ISO_FILE="$(find build -type f -name '*.iso' | head -n1)"
           if [ -n "$ISO_FILE" ]; then
             echo "=== xorriso El Torito report ==="
             xorriso -indev "$ISO_FILE" -report_el_torito as_mkisofs
@@ -154,4 +156,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OS-LVirt-${{ matrix.rel }}-${{ matrix.tag }}
-          path: build/*.iso
+          path: |
+            build/${{ matrix.rel }}/*.iso
+            build/${{ matrix.rel }}/*.iso.sha256
