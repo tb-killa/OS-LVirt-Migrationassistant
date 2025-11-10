@@ -47,7 +47,7 @@ jobs:
         run: |
           echo "=== Pull container and start build for Rocky${{ matrix.rel }} ==="
           docker pull "${{ matrix.image }}"
-          docker run --rm -v "${{ github.workspace }}":/workspace -w /workspace \
+          docker run --rm -i -v "${{ github.workspace }}":/workspace -w /workspace \
             "${{ matrix.image }}" /bin/bash -e <<'EOF'
 
             echo "=== Preparing environment for Rocky${{ matrix.rel }} ==="
